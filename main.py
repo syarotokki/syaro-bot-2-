@@ -5,11 +5,13 @@ import json
 import os
 
 intents = discord.Intents.default()
-intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 CONFIG_FILE = "config.json"
+YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 
+# 設定ファイル読み込み・保存
 def load_config():
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r") as f:
@@ -23,14 +25,15 @@ def save_config(config):
 config = load_config()
 last_video_ids = {}
 
-YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
-
+# スラッシュコマンド同期とタスク開始
 @bot.event
 async def on_ready():
     await bot.tree.sync()
     print(f"✅ Logged in as {bot.user}")
+    check_new_videos.start()
 
-@bot.tree.command(name="subscribe", description="YouTubeチャンネルの通知設定をする")
+# /subscribe コマンド
+@bot.tree.command(name="subscribe", description="YouTubeチャンネルの通知設定をします")
 @discord.app_commands.describe(
     youtube_channel_id="通知したいYouTubeチャンネルのID",
     notify_channel="通知を送るDiscordチャンネル"
@@ -43,16 +46,18 @@ async def subscribe(interaction: discord.Interaction, youtube_channel_id: str, n
     }
     save_config(config)
     await interaction.response.send_message(
-        f"✅ 通知設定完了！\nYouTubeチャンネルID: `{youtube_channel_id}`\n通知先: {notify_channel.mention}",
+        f"✅ 通知設定が完了しました！\nYouTubeチャンネルID: `{youtube_channel_id}`\n通知先: {notify_channel.mention}",
         ephemeral=True
     )
 
+# YouTube APIから最新動画IDとタイトルを取得
 def get_latest_video_id(channel_id):
     url = f"https://www.googleapis.com/youtube/v3/search?key={YOUTUBE_API_KEY}&channelId={channel_id}&part=snippet,id&order=date&maxResults=1"
     response = requests.get(url).json()
-    video = response['items'][0]
-    return video['id']['videoId'], video['snippet']['title']
+    video = response["items"][0]
+    return video["id"]["videoId"], video["snippet"]["title"]
 
+# 定期的に新着動画を確認して通知
 @tasks.loop(minutes=5)
 async def check_new_videos():
     for guild_id, settings in config.items():
@@ -64,10 +69,9 @@ async def check_new_videos():
                 last_video_ids[guild_id] = video_id
                 channel = bot.get_channel(notify_channel_id)
                 if channel:
-                    await channel.send(f"🎥 新しい動画が公開されました！\n**{title}**\nhttps://www.youtube.com/watch?v={video_id}")
+                    await channel.send(f"🎬 新しい動画が公開されました！\n**{title}**\nhttps://www.youtube.com/watch?v={video_id}")
         except Exception as e:
-            print(f"エラー（{guild_id}）:", e)
+            print(f"⚠️ エラー（{guild_id}）: {e}")
 
-check_new_videos.start()
-
-bot.run(os.environ["DISCORD_TOKEN"])
+# 起動
+bot.run(DISCORD_TOKEN)
