@@ -9,117 +9,103 @@ intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = app_commands.CommandTree(bot)
 
-# 設定保存用
-CONFIG_FILE = "config.json"
-if not os.path.exists(CONFIG_FILE):
-    with open(CONFIG_FILE, "w") as f:
-        json.dump({}, f)
+# 保存用ファイル
+SETTINGS_FILE = "settings.json"
+NOTIFIED_FILE = "notified.json"
 
-def load_config():
-    with open(CONFIG_FILE, "r") as f:
+# 初期化
+def load_settings():
+    if not os.path.exists(SETTINGS_FILE):
+        with open(SETTINGS_FILE, 'w') as f:
+            json.dump({}, f)
+    with open(SETTINGS_FILE, 'r') as f:
         return json.load(f)
 
-def save_config(config):
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f, indent=2)
+def save_settings(settings):
+    with open(SETTINGS_FILE, 'w') as f:
+        json.dump(settings, f, indent=4)
 
-# チャンネルごとの最新動画ID記録
-last_video_ids = {}
+def load_notified():
+    if not os.path.exists(NOTIFIED_FILE):
+        with open(NOTIFIED_FILE, 'w') as f:
+            json.dump({}, f)
+    with open(NOTIFIED_FILE, 'r') as f:
+        return json.load(f)
 
-YOUTUBE_API_KEY = "YOUR_YOUTUBE_API_KEY"  # ←★ここにYouTube APIキーを入れてください
+def save_notified(data):
+    with open(NOTIFIED_FILE, 'w') as f:
+        json.dump(data, f, indent=4)
 
+settings = load_settings()
+notified = load_notified()
+
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+
+# 通知登録コマンド
 @tree.command(name="set_notification", description="通知先チャンネルとYouTubeチャンネルIDを登録")
-@app_commands.describe(channel="通知先チャンネル", youtube_channel_id="YouTubeチャンネルID")
+@app_commands.describe(channel="通知先チャンネル", youtube_channel_id="YouTubeのチャンネルID")
 async def set_notification(interaction: discord.Interaction, channel: discord.TextChannel, youtube_channel_id: str):
-    config = load_config()
-    config[str(interaction.guild.id)] = {
+    settings[str(interaction.guild.id)] = {
         "channel_id": channel.id,
         "youtube_channel_id": youtube_channel_id
     }
-    save_config(config)
-    await interaction.response.send_message(f"通知先チャンネルを {channel.mention} に設定しました。", ephemeral=True)
+    save_settings(settings)
+    await interaction.response.send_message(f"通知設定を保存しました。通知先: {channel.mention}、YouTubeチャンネルID: `{youtube_channel_id}`")
 
+# 過去動画を一括通知
 @tree.command(name="notify_past", description="過去の動画を一括で通知")
 async def notify_past(interaction: discord.Interaction):
-    config = load_config()
-    guild_config = config.get(str(interaction.guild.id))
-    if not guild_config:
-        await interaction.response.send_message("まずは /set_notification で通知先を設定してください。", ephemeral=True)
+    guild_id = str(interaction.guild.id)
+    if guild_id not in settings:
+        await interaction.response.send_message("このサーバーでは通知設定がされていません。まず /set_notification を使用してください。")
         return
 
-    youtube_channel_id = guild_config["youtube_channel_id"]
-    channel = bot.get_channel(guild_config["channel_id"])
+    channel_id = settings[guild_id]["channel_id"]
+    youtube_channel_id = settings[guild_id]["youtube_channel_id"]
+    channel = bot.get_channel(channel_id)
+    
+    videos = get_latest_videos(youtube_channel_id, count=5)
+    for video in reversed(videos):
+        video_id = video['id']['videoId']
+        if video['id']['kind'] == 'youtube#video':
+            await channel.send(f"新しい動画が投稿されました！\nhttps://www.youtube.com/watch?v={video_id}")
+        elif video['id']['kind'] == 'youtube#liveBroadcast':
+            live_time = video['snippet'].get('publishedAt', '不明')
+            await channel.send(f"ライブ配信が始まりました！🟢\n開始時刻: {live_time}\nhttps://www.youtube.com/watch?v={video_id}")
+        notified.setdefault(guild_id, []).append(video_id)
+    save_notified(notified)
+    await interaction.response.send_message("過去動画の通知を完了しました。")
 
-    video_infos = fetch_videos(youtube_channel_id)
-    if not video_infos:
-        await interaction.response.send_message("動画が見つかりませんでした。", ephemeral=True)
-        return
-
-    for video in reversed(video_infos):
-        await channel.send(format_video_message(video))
-    await interaction.response.send_message("過去の動画を通知しました。", ephemeral=True)
-
-def fetch_videos(channel_id, max_results=5):
-    url = (
-        f"https://www.googleapis.com/youtube/v3/search?"
-        f"key={YOUTUBE_API_KEY}&channelId={channel_id}"
-        f"&part=snippet,id&order=date&maxResults={max_results}"
-    )
+# 動画取得関数
+def get_latest_videos(channel_id, count=1):
+    url = f"https://www.googleapis.com/youtube/v3/search?key={YOUTUBE_API_KEY}&channelId={channel_id}&part=snippet,id&order=date&maxResults={count}"
     response = requests.get(url)
-    if response.status_code != 200:
-        return []
+    return response.json().get("items", [])
 
-    data = response.json()
-    videos = []
-    for item in data.get("items", []):
-        video_id = item["id"].get("videoId")
-        if not video_id:
-            continue
-        title = item["snippet"]["title"]
-        published_at = item["snippet"]["publishedAt"]
-        is_live = "[ライブ]" in title or "ライブ" in title or "live" in title.lower()
-        videos.append({
-            "id": video_id,
-            "title": title,
-            "published_at": published_at,
-            "is_live": is_live
-        })
-    return videos
-
-def format_video_message(video):
-    url = f"https://www.youtube.com/watch?v={video['id']}"
-    if video["is_live"]:
-        return f"🔴 **ライブ配信が始まりました！**\n{video['title']}\n開始時刻: <t:{int(parse_published_at(video['published_at']))}:F>\n{url}"
-    else:
-        return f"📢 **新しい動画が投稿されました！**\n{video['title']}\n{url}"
-
-def parse_published_at(iso_time):
-    import datetime
-    dt = datetime.datetime.fromisoformat(iso_time.replace("Z", "+00:00"))
-    return int(dt.timestamp())
-
-@tasks.loop(minutes=3)
+# 定期チェック
+@tasks.loop(minutes=5)
 async def check_new_videos():
-    config = load_config()
-    for guild_id, info in config.items():
-        youtube_channel_id = info["youtube_channel_id"]
-        channel = bot.get_channel(info["channel_id"])
-        if not channel:
-            continue
+    for guild_id, config in settings.items():
+        channel = bot.get_channel(config["channel_id"])
+        videos = get_latest_videos(config["youtube_channel_id"], count=1)
+        for video in videos:
+            video_id = video['id'].get('videoId')
+            if not video_id or video_id in notified.get(guild_id, []):
+                continue
 
-        videos = fetch_videos(youtube_channel_id, max_results=1)
-        if not videos:
-            continue
+            if video['id']['kind'] == 'youtube#video':
+                await channel.send(f"新しい動画が投稿されました！\nhttps://www.youtube.com/watch?v={video_id}")
+            elif video['id']['kind'] == 'youtube#liveBroadcast':
+                live_time = video['snippet'].get('publishedAt', '不明')
+                await channel.send(f"ライブ配信が始まりました！🟢\n開始時刻: {live_time}\nhttps://www.youtube.com/watch?v={video_id}")
 
-        latest_video = videos[0]
-        if last_video_ids.get(guild_id) != latest_video["id"]:
-            last_video_ids[guild_id] = latest_video["id"]
-            await channel.send(format_video_message(latest_video))
+            notified.setdefault(guild_id, []).append(video_id)
+        save_notified(notified)
 
 @bot.event
 async def on_ready():
+    print(f"Bot is ready as {bot.user}")
     await tree.sync()
-    print(f"ログインしました: {bot.user}")
     check_new_videos.start()
 
-bot.run("YOUR_DISCORD_TOKEN")  # ←★ここにDiscord Bot Tokenを入れてください
+bot.run(os.getenv("DISCORD_TOKEN"))
