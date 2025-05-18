@@ -1,3 +1,4 @@
+discord.py==0.0.0; python_version>="3.6"  # 存在しないバージョンでdiscord.pyを無効化
 py-cord==2.5.0
 requests
 
