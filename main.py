@@ -1,13 +1,13 @@
 import discord
 from discord.ext import commands, tasks
-from discord import app_commands
 import os
 import json
 import requests
 import asyncio
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-GUILD_ID = discord.Object(id=int(os.getenv("GUILD_ID", 0)))  # 任意。特定ギルドだけに登録するなら設定
+GUILD_ID = os.getenv("GUILD_ID")
+guild_obj = discord.Object(id=int(GUILD_ID)) if GUILD_ID else None
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -88,15 +88,14 @@ async def check_new_videos():
 async def on_ready():
     print(f"Logged in as {bot.user}")
     try:
-        await tree.sync(guild=GUILD_ID if GUILD_ID.id else None)
+        await tree.sync(guild=guild_obj if guild_obj else None)
         print("Slash commands synced.")
     except Exception as e:
         print(f"Failed to sync commands: {e}")
     check_new_videos.start()
 
 # /notify 設定コマンド
-@tree.command(name="notify", description="通知するYouTubeチャンネルと通知先を設定します", guild=GUILD_ID if GUILD_ID.id else None)
-@app_commands.describe(youtube_channel_id="YouTubeのチャンネルID", notify_channel="通知を送信するチャンネル")
+@tree.command(name="notify", description="通知するYouTubeチャンネルと通知先を設定します", guild=guild_obj if guild_obj else None)
 async def notify(interaction: discord.Interaction, youtube_channel_id: str, notify_channel: discord.TextChannel):
     data = load_data()
     guild_id = str(interaction.guild.id)
@@ -113,7 +112,7 @@ async def notify(interaction: discord.Interaction, youtube_channel_id: str, noti
     await interaction.response.send_message(f"✅ 通知設定を保存しました。\nYouTubeチャンネル: `{youtube_channel_id}`\n通知先: {notify_channel.mention}")
 
 # /notify_past 過去動画一括通知コマンド
-@tree.command(name="notify_past", description="YouTubeチャンネルの過去の動画を一括通知します", guild=GUILD_ID if GUILD_ID.id else None)
+@tree.command(name="notify_past", description="YouTubeチャンネルの過去の動画を一括通知します", guild=guild_obj if guild_obj else None)
 async def notify_past(interaction: discord.Interaction):
     await interaction.response.defer()
     data = load_data()
@@ -153,4 +152,3 @@ async def notify_past(interaction: discord.Interaction):
     await interaction.followup.send(f"✅ 最新{len(videos)}件の動画を通知しました。")
 
 bot.run(TOKEN)
-
