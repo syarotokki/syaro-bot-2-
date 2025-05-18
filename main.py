@@ -5,11 +5,11 @@ import json
 import os
 
 intents = discord.Intents.default()
+intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 CONFIG_FILE = "config.json"
 
-# 設定を保存/読み込み
 def load_config():
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r") as f:
@@ -25,13 +25,11 @@ last_video_ids = {}
 
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
 
-# Bot起動時にスラッシュコマンドを同期
 @bot.event
 async def on_ready():
     await bot.tree.sync()
     print(f"✅ Logged in as {bot.user}")
 
-# /subscribe コマンド定義
 @bot.tree.command(name="subscribe", description="YouTubeチャンネルの通知設定をする")
 @discord.app_commands.describe(
     youtube_channel_id="通知したいYouTubeチャンネルのID",
@@ -49,14 +47,12 @@ async def subscribe(interaction: discord.Interaction, youtube_channel_id: str, n
         ephemeral=True
     )
 
-# YouTube API で最新動画を取得
 def get_latest_video_id(channel_id):
     url = f"https://www.googleapis.com/youtube/v3/search?key={YOUTUBE_API_KEY}&channelId={channel_id}&part=snippet,id&order=date&maxResults=1"
     response = requests.get(url).json()
     video = response['items'][0]
     return video['id']['videoId'], video['snippet']['title']
 
-# 定期的にチェックして通知
 @tasks.loop(minutes=5)
 async def check_new_videos():
     for guild_id, settings in config.items():
@@ -74,5 +70,4 @@ async def check_new_videos():
 
 check_new_videos.start()
 
-# Bot起動
 bot.run(os.environ["DISCORD_TOKEN"])
